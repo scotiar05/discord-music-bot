@@ -1,74 +1,71 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const ytdl = require('ytdl-core');
-const { queues } = require('./queue');
+const { EmbedBuilder } = require('discord.js');
+const { QueryType } = require('discord-player');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Play a song from YouTube')
+        .setDescription('Play a song or playlist')
         .addStringOption(option =>
-            option.setName('song')
-                .setDescription('The YouTube URL or search query of the song to play')
+            option.setName('query')
+                .setDescription('The song or playlist to play (URL or search query)')
                 .setRequired(true)),
 
     async execute(interaction) {
-        const song = interaction.options.getString('song');
-        const voiceChannel = interaction.member.voice.channel;
+        const query = interaction.options.getString('query');
 
-        if (!voiceChannel) {
-            return interaction.reply('You need to be in a voice channel to use this command!');
+        if (!interaction.member.voice.channel) {
+            return interaction.reply({ content: 'You need to be in a voice channel to use this command!', ephemeral: true });
         }
 
+        await interaction.deferReply();
+
+        const { client } = interaction;
+
         try {
-            let queue = queues.get(interaction.guild.id);
-            if (!queue) {
-                queue = new (require('../utils/queue'))();
-                queues.set(interaction.guild.id, queue);
+            const searchResult = await client.player.search(query, {
+                requestedBy: interaction.user,
+                searchEngine: QueryType.AUTO
+            });
+
+            if (!searchResult || !searchResult.tracks.length) {
+                return interaction.followUp({ content: 'No results found!', ephemeral: true });
             }
 
-            const songInfo = await ytdl.getInfo(song);
-            const songData = {
-                title: songInfo.videoDetails.title,
-                url: songInfo.videoDetails.video_url,
-            };
+            const queue = await client.player.createQueue(interaction.guild, {
+                metadata: {
+                    channel: interaction.channel
+                }
+            });
 
-            queue.add(songData);
+            try {
+                if (!queue.connection) await queue.connect(interaction.member.voice.channel);
+            } catch {
+                client.player.deleteQueue(interaction.guildId);
+                return interaction.followUp({ content: 'Could not join your voice channel!', ephemeral: true });
+            }
 
-            if (queue.getQueue().length === 1 && !queue.getCurrentSong()) {
-                await playSong(interaction, queue);
+            const embed = new EmbedBuilder()
+                .setColor('#0099ff');
+
+            if (searchResult.playlist) {
+                queue.addTracks(searchResult.tracks);
+                embed
+                    .setDescription(`**${searchResult.tracks.length} songs from [${searchResult.playlist.title}](${searchResult.playlist.url})** have been added to the queue.`)
+                    .setThumbnail(searchResult.playlist.thumbnail);
             } else {
-                await interaction.reply(`Added to queue: ${songData.title}`);
+                queue.addTrack(searchResult.tracks[0]);
+                embed
+                    .setDescription(`**[${searchResult.tracks[0].title}](${searchResult.tracks[0].url})** has been added to the queue.`)
+                    .setThumbnail(searchResult.tracks[0].thumbnail)
+                    .setFooter({ text: `Duration: ${searchResult.tracks[0].duration}` });
             }
+
+            if (!queue.playing) await queue.play();
+            await interaction.followUp({ embeds: [embed] });
         } catch (error) {
-            console.error(error);
-            await interaction.reply('There was an error while executing this command!');
+            client.log(`[ERROR] Error in play command: ${error.message}`);
+            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
         }
     },
 };
-
-async function playSong(interaction, queue) {
-    const song = queue.next();
-    if (!song) {
-        return interaction.reply('No songs in the queue!');
-    }
-
-    const connection = joinVoiceChannel({
-        channelId: interaction.member.voice.channel.id,
-        guildId: interaction.guild.id,
-        adapterCreator: interaction.guild.voiceAdapterCreator,
-    });
-
-    const stream = ytdl(song.url, { filter: 'audioonly' });
-    const resource = createAudioResource(stream);
-    const player = createAudioPlayer();
-
-    player.play(resource);
-    connection.subscribe(player);
-
-    player.on(AudioPlayerStatus.Idle, () => {
-        playSong(interaction, queue);
-    });
-
-    await interaction.reply(`Now playing: ${song.title}`);
-}

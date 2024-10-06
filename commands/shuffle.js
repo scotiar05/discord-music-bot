@@ -1,5 +1,5 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { queues } = require('./queue');
+const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -7,26 +7,38 @@ module.exports = {
         .setDescription('Shuffle the current queue'),
 
     async execute(interaction) {
-        const guildId = interaction.guild.id;
-        const queue = queues.get(guildId);
+        const { client } = interaction;
+        const queue = client.player.getQueue(interaction.guildId);
 
-        if (!queue || queue.isEmpty()) {
-            return interaction.reply('The queue is currently empty.');
+        if (!queue || !queue.playing) {
+            return interaction.reply({ content: 'No music is currently playing!', ephemeral: true });
         }
 
-        const currentSong = queue.getCurrentSong();
-        const songs = queue.getQueue();
-
-        // Fisher-Yates shuffle algorithm
-        for (let i = songs.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [songs[i], songs[j]] = [songs[j], songs[i]];
+        if (!interaction.member.voice.channel) {
+            return interaction.reply({ content: 'You need to be in a voice channel to use this command!', ephemeral: true });
         }
 
-        queue.clear();
-        queue.add(currentSong);
-        songs.forEach(song => queue.add(song));
+        if (interaction.guild.members.me.voice.channelId && interaction.member.voice.channelId !== interaction.guild.members.me.voice.channelId) {
+            return interaction.reply({ content: 'You need to be in the same voice channel as the bot to use this command!', ephemeral: true });
+        }
 
-        await interaction.reply('The queue has been shuffled!');
+        if (queue.tracks.length < 2) {
+            return interaction.reply({ content: 'Not enough tracks in the queue to shuffle!', ephemeral: true });
+        }
+
+        try {
+            const success = queue.shuffle();
+
+            const embed = new EmbedBuilder()
+                .setDescription(`${success ? '🔀 Queue shuffled' : '❌ Failed to shuffle the queue'}`)
+                .setFooter({ text: `Requested by ${interaction.user.tag}` })
+                .setTimestamp()
+                .setColor(success ? '#00FF00' : '#FF0000');
+
+            return interaction.reply({ embeds: [embed] });
+        } catch (error) {
+            client.log(`[ERROR] Error in shuffle command: ${error.message}`);
+            return interaction.reply({ content: 'There was an error while trying to shuffle the queue!', ephemeral: true });
+        }
     },
 };

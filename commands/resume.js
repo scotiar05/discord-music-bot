@@ -1,5 +1,4 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { getVoiceConnection } = require('@discordjs/voice');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -7,19 +6,16 @@ module.exports = {
         .setDescription('Resume the paused song'),
 
     async execute(interaction) {
-        const connection = getVoiceConnection(interaction.guild.id);
+        const queue = interaction.client.player.getQueue(interaction.guildId);
 
-        if (!connection) {
-            return interaction.reply('I am not currently in a voice channel!');
+        if (!queue || !queue.playing) {
+            return interaction.reply({ content: 'No music is currently playing!', ephemeral: true });
         }
 
-        const player = connection.state.subscription.player;
+        const success = queue.setPaused(false);
 
-        if (player.state.status !== 'paused') {
-            return interaction.reply('There is no paused song to resume!');
-        }
-
-        player.unpause();
-        await interaction.reply('Resumed the paused song.');
+        return interaction.reply({
+            content: success ? 'The music has been resumed!' : 'Something went wrong while trying to resume the music!',
+        });
     },
 };

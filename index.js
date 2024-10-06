@@ -1,5 +1,6 @@
 // Required Discord.js classes and configuration
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, ActivityType } = require('discord.js');
+const { Player } = require('discord-player');
 const { token } = require('./config.json');
 const fs = require('fs');
 const path = require('path');
@@ -16,48 +17,81 @@ const client = new Client({
 
 // Create a new collection for commands
 client.commands = new Collection();
+client.player = new Player(client);
 
-// Read command files from the commands directory
-const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+// Simple logging function
+function log(message) {
+  console.log(`[${new Date().toISOString()}] ${message}`);
+}
 
-// Load all command files
-for (const file of commandFiles) {
-  const filePath = path.join(commandsPath, file);
-  const command = require(filePath);
-  // Set a new item in the Collection with the key as the command name and the value as the exported module
-  if ('data' in command && 'execute' in command) {
-    client.commands.set(command.data.name, command);
-  } else {
-    console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+// Load commands from the commands directory
+function loadCommands() {
+  const commandsPath = path.join(__dirname, 'commands');
+  const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+  for (const file of commandFiles) {
+    const filePath = path.join(commandsPath, file);
+    try {
+      const command = require(filePath);
+      if ('data' in command && 'execute' in command) {
+        client.commands.set(command.data.name, command);
+        log(`Loaded command: ${command.data.name}`);
+      } else {
+        log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+      }
+    } catch (error) {
+      log(`[ERROR] Failed to load command from file ${filePath}`);
+      console.error(error);
+    }
   }
 }
 
 // When the client is ready, run this code (only once)
 client.once('ready', () => {
-  console.log('Bot is ready!');
+  log('Bot is ready!');
+  client.user.setActivity('music | /help', { type: ActivityType.Listening });
+  loadCommands();
 });
 
 // Handle incoming interactions
 client.on('interactionCreate', async interaction => {
-  // If the interaction isn't a command, ignore it
   if (!interaction.isCommand()) return;
 
-  // Get the command from the client.commands collection
   const command = client.commands.get(interaction.commandName);
 
-  // If the command doesn't exist, ignore it
-  if (!command) return;
+  if (!command) {
+    log(`[WARNING] Received unknown command: ${interaction.commandName}`);
+    return;
+  }
 
   try {
-    // Execute the command
     await command.execute(interaction);
   } catch (error) {
-    // Log any errors and send an error message
+    log(`[ERROR] Error executing command ${interaction.commandName}`);
     console.error(error);
     await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
   }
 });
 
+client.player.on('trackStart', (queue, track) => {
+  queue.metadata.channel.send(`🎶 | Now playing: **${track.title}**`);
+});
+
+client.player.on('error', (queue, error) => {
+  log(`[ERROR] Player error: ${error.message}`);
+  queue.metadata.channel.send('An error occurred while playing music.');
+});
+
+// Error handling for the client
+client.on('error', error => {
+  log(`[ERROR] Client error: ${error.message}`);
+});
+
+client.on('warn', warning => {
+  log(`[WARN] ${warning}`);
+});
+
 // Log in to Discord with your client's token
-client.login(token);
+client.login(token).catch(error => {
+  log(`[ERROR] Failed to log in: ${error.message}`);
+});
