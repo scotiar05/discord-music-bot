@@ -3,11 +3,11 @@ const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName('seek')
-        .setDescription('Seek to a specific time in the current track')
+        .setName('rewind')
+        .setDescription('Rewind the current track by a specified amount of time')
         .addStringOption(option =>
             option.setName('time')
-                .setDescription('The time to seek to (e.g., 1:30, 2m30s)')
+                .setDescription('The time to rewind (e.g., 30s, 1m, 1:30)')
                 .setRequired(true)),
 
     async execute(interaction) {
@@ -31,25 +31,24 @@ module.exports = {
         const seconds = parseTimeString(timeString);
 
         if (isNaN(seconds)) {
-            return interaction.reply({ content: 'Invalid time format. Please use a format like "1:30" or "2m30s".', ephemeral: true });
+            return interaction.reply({ content: 'Invalid time format. Please use a format like "30s", "1m", or "1:30".', ephemeral: true });
         }
 
-        if (seconds > queue.current.durationMS / 1000) {
-            return interaction.reply({ content: 'The specified time is longer than the track duration!', ephemeral: true });
-        }
+        const currentTime = queue.currentTime;
+        const newTime = Math.max(0, currentTime - seconds * 1000);
 
         try {
-            await queue.seek(seconds * 1000);
+            await queue.seek(newTime);
 
             const embed = new EmbedBuilder()
-                .setDescription(`⏩ Seeked to ${formatTime(seconds)} in the current track.`)
+                .setDescription(`⏪ Rewound the track by ${formatTime(seconds)}. Current position: ${formatTime(newTime / 1000)}`)
                 .setFooter({ text: `Requested by ${interaction.user.tag}` })
                 .setTimestamp();
 
             return interaction.reply({ embeds: [embed] });
         } catch (error) {
-            client.log(`[ERROR] Error in seek command: ${error.message}`);
-            return interaction.reply({ content: 'There was an error while trying to seek!', ephemeral: true });
+            client.log(`[ERROR] Error in rewind command: ${error.message}`);
+            return interaction.reply({ content: 'There was an error while trying to rewind!', ephemeral: true });
         }
     },
 };
@@ -77,7 +76,7 @@ function parseTimeString(timeString) {
 function formatTime(seconds) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    const remainingSeconds = seconds % 60;
+    const remainingSeconds = Math.floor(seconds % 60);
 
     if (hours > 0) {
         return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
