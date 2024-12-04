@@ -1,65 +1,94 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { EmbedBuilder } = require('discord.js');
-const ytsr = require('ytsr');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('search')
-        .setDescription('Search for a song on YouTube')
+        .setDescription('Search for a song and add it to the queue')
         .addStringOption(option =>
             option.setName('query')
                 .setDescription('The song to search for')
                 .setRequired(true)),
 
     async execute(interaction) {
-        await interaction.deferReply();
-
+        const { client } = interaction;
         const query = interaction.options.getString('query');
-        const searchResults = await ytsr(query, { limit: 5 });
 
-        if (searchResults.items.length === 0) {
-            return interaction.editReply('No results found.');
+        if (!interaction.member.voice.channel) {
+            return interaction.reply({ content: 'You need to be in a voice channel to use this command!', ephemeral: true });
         }
 
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('Search Results')
-            .setDescription('React with the number to add the song to the queue.');
+        if (interaction.guild.members.me.voice.channelId && interaction.member.voice.channelId !== interaction.guild.members.me.voice.channelId) {
+            return interaction.reply({ content: 'You need to be in the same voice channel as the bot to use this command!', ephemeral: true });
+        }
 
-        searchResults.items.forEach((item, index) => {
-            embed.addFields({ name: `${index + 1}. ${item.title}`, value: `Duration: ${item.duration}` });
-        });
+        await interaction.deferReply();
 
-        const message = await interaction.editReply({ embeds: [embed] });
+        try {
+            const searchResult = await client.player.search(query, {
+                requestedBy: interaction.user,
+                searchEngine: 'youtube'
+            });
 
-        const filter = (reaction, user) => {
-            return ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'].includes(reaction.emoji.name) && user.id === interaction.user.id;
-        };
-
-        const collector = message.createReactionCollector({ filter, time: 60000 });
-
-        collector.on('collect', async (reaction, user) => {
-            const index = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'].indexOf(reaction.emoji.name);
-            const selectedSong = searchResults.items[index];
-
-            // Here you would typically add the song to the queue
-            // For now, we'll just confirm the selection
-            await interaction.followUp(`Added to queue: ${selectedSong.title}`);
-
-            collector.stop();
-        });
-
-        collector.on('end', collected => {
-            if (collected.size === 0) {
-                interaction.followUp('Search timed out.');
+            if (!searchResult || !searchResult.tracks.length) {
+                return interaction.followUp({ content: `No results found for "${query}"!`, ephemeral: true });
             }
-        });
 
-        // Add reaction options
-        await message.react('1️⃣');
-        await message.react('2️⃣');
-        await message.react('3️⃣');
-        await message.react('4️⃣');
-        await message.react('5️⃣');
+            const queue = client.player.createQueue(interaction.guild, {
+                metadata: interaction.channel
+            });
+
+            const embed = new EmbedBuilder()
+                .setTitle(`Search results for "${query}"`)
+                .setDescription(searchResult.tracks.slice(0, 5).map((t, i) => `${i + 1}. **[${t.title}](${t.url})** (${t.duration})`).join('\n'))
+                .setFooter({ text: 'Type the number of the song you want to add to the queue, or type "cancel" to cancel.' });
+
+            const response = await interaction.followUp({ embeds: [embed] });
+
+            const collector = interaction.channel.createMessageCollector({
+                filter: m => m.author.id === interaction.user.id,
+                time: 30000,
+                max: 1
+            });
+
+            collector.on('collect', async m => {
+                if (m.content.toLowerCase() === 'cancel') {
+                    collector.stop();
+                    return interaction.followUp({ content: 'Search cancelled.', ephemeral: true });
+                }
+
+                const index = parseInt(m.content);
+
+                if (isNaN(index) || index < 1 || index > Math.min(searchResult.tracks.length, 5)) {
+                    return interaction.followUp({ content: 'Invalid number. Please provide a number between 1 and 5.', ephemeral: true });
+                }
+
+                collector.stop();
+
+                const track = searchResult.tracks[index - 1];
+
+                if (!queue.connection) await queue.connect(interaction.member.voice.channel);
+
+                queue.addTrack(track);
+
+                if (!queue.playing) await queue.play();
+
+                const addedEmbed = new EmbedBuilder()
+                    .setDescription(`✅ | Added **[${track.title}](${track.url})** to the queue.`)
+                    .setThumbnail(track.thumbnail);
+
+                return interaction.followUp({ embeds: [addedEmbed] });
+            });
+
+            collector.on('end', (collected, reason) => {
+                if (reason === 'time') {
+                    interaction.followUp({ content: 'Search timed out.', ephemeral: true });
+                }
+            });
+
+        } catch (error) {
+            client.log(`[ERROR] Error in search command: ${error.message}`);
+            return interaction.followUp({ content: 'There was an error while searching for the song!', ephemeral: true });
+        }
     },
 };

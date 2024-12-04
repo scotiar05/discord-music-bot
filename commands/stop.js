@@ -1,5 +1,4 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { getVoiceConnection } = require('@discordjs/voice');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -7,16 +6,14 @@ module.exports = {
         .setDescription('Stop playing music and clear the queue'),
 
     async execute(interaction) {
-        const connection = getVoiceConnection(interaction.guild.id);
+        const queue = interaction.client.player.getQueue(interaction.guildId);
 
-        if (!connection) {
-            return interaction.reply('I am not currently in a voice channel!');
+        if (!queue || !queue.playing) {
+            return interaction.reply({ content: 'No music is currently playing!', ephemeral: true });
         }
 
-        connection.destroy();
-        // Here we would also clear the queue, but we haven't implemented a queue system yet.
-        // We'll add this functionality when we implement the queue system.
+        queue.destroy();
 
-        await interaction.reply('Stopped playing music and cleared the queue.');
+        return interaction.reply('Stopped playing music and cleared the queue.');
     },
 };
